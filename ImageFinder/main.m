@@ -11,6 +11,42 @@
 
 #define THUMBNAIL_SAVE_PATH @"/Users/jaeheecho/Desktop/thumbnails"
 
+void saveThumbnails(NSURL *fileURL) {
+    //Check if fileURL is an image
+    NSString *pathString = [[fileURL absoluteString] stringByRemovingPercentEncoding];
+    
+    // trimming first 7 letters: "file://"
+    pathString = [pathString substringFromIndex:7];
+    CFStringRef fileExtension = (__bridge CFStringRef) [pathString pathExtension];
+    CFStringRef fileUTI = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, fileExtension, NULL);
+    
+    if (UTTypeConformsTo(fileUTI, kUTTypeImage)) {
+        NSImage *originalImage = [[NSImage alloc]initWithContentsOfFile:pathString];
+        if (originalImage == nil) {
+            NSLog(@"image nil: %@", pathString);
+        } else {
+            //needs to create thumbnails
+            //                    NSImage *smallImage = [[NSImage alloc]initWithSize:NSMakeSize(32, 32)];
+            //                    NSSize originalSize = [originalImage size];
+            //                    NSRect fromRect = NSMakeRect(0, 0, originalSize.width, originalSize.height);
+            //                    [smallImage lockFocus];
+            //                    [originalImage drawInRect:NSMakeRect(0, 0, 32, 32) fromRect:fromRect operation:NSCompositeCopy fraction:1.0f];
+            //                    [smallImage unlockFocus];
+            //
+            //
+            //                    CGImageRef cgRef = [smallImage CGImageForProposedRect:NULL
+            //                                                             context:nil
+            //                                                               hints:nil];
+            //                    NSBitmapImageRep *newRep = [[NSBitmapImageRep alloc] initWithCGImage:cgRef];
+            //                    [newRep setSize:[smallImage size]];   // if you want the same resolution
+            //                    NSData *pngData = [newRep representationUsingType:NSPNGFileType properties:nil];
+            //                    [pngData writeToFile:[NSString stringWithFormat:@"%@/%@", THUMBNAIL_SAVE_PATH, pathString] atomically:YES];
+            
+            NSLog(@"Image: %@", pathString);
+        }
+    }
+}
+
 void getImageWithOperation(NSFileManager *manager, NSDirectoryEnumerator *enumerator, NSOperationQueue *operationQueue, NSURL *path) {
     
     for (NSURL *fileURL in enumerator) {
@@ -37,53 +73,42 @@ void getImageWithOperation(NSFileManager *manager, NSDirectoryEnumerator *enumer
             [operationQueue addOperationWithBlock:^{
                 getImageWithOperation(manager, nextEnumerator, operationQueue, fileURL);
             }];
-            
-            continue;
         } else if (![isHidden boolValue]) {
-            //Check if fileURL is an image
-            NSString *pathString = [[fileURL absoluteString] stringByRemovingPercentEncoding];
-            
-            // trimming first 7 letters: "file://"
-            pathString = [pathString substringFromIndex:7];
-            CFStringRef fileExtension = (__bridge CFStringRef) [pathString pathExtension];
-            CFStringRef fileUTI = UTTypeCreatePreferredIdentifierForTag(kUTTagClassFilenameExtension, fileExtension, NULL);
-            
-            if (UTTypeConformsTo(fileUTI, kUTTypeImage)) {
-                NSImage *originalImage = [[NSImage alloc]initWithContentsOfFile:pathString];
-                if (originalImage == nil) {
-                    NSLog(@"image nil: %@", pathString);
-                } else {
-                    //needs to create thumbnails
-//                    NSImage *smallImage = [[NSImage alloc]initWithSize:NSMakeSize(32, 32)];
-//                    NSSize originalSize = [originalImage size];
-//                    NSRect fromRect = NSMakeRect(0, 0, originalSize.width, originalSize.height);
-//                    [smallImage lockFocus];
-//                    [originalImage drawInRect:NSMakeRect(0, 0, 32, 32) fromRect:fromRect operation:NSCompositeCopy fraction:1.0f];
-//                    [smallImage unlockFocus];
-//                    
-//                    
-//                    CGImageRef cgRef = [smallImage CGImageForProposedRect:NULL
-//                                                             context:nil
-//                                                               hints:nil];
-//                    NSBitmapImageRep *newRep = [[NSBitmapImageRep alloc] initWithCGImage:cgRef];
-//                    [newRep setSize:[smallImage size]];   // if you want the same resolution
-//                    NSData *pngData = [newRep representationUsingType:NSPNGFileType properties:nil];
-//                    [pngData writeToFile:[NSString stringWithFormat:@"%@/%@", THUMBNAIL_SAVE_PATH, pathString] atomically:YES];
-                    
-                    NSLog(@"Image: %@", pathString);
-                }
-            }
+            saveThumbnails(fileURL);
         }
     }
 }
 
-//void getImageWithGCD(NSFileManager *manager, NSDirectoryEnumerator *enumerator, dispatch_queue_t queue, NSString *path) {
-//    NSString *entry;
-//    while ((entry = [enumerator nextObject]) != nil) {
-//        BOOL isDirectory;
-//        
-//    }
-//}
+void getImageWithGCD(NSFileManager *manager, NSDirectoryEnumerator *enumerator, dispatch_queue_t queue, NSURL *path) {
+    for (NSURL *fileURL in enumerator) {
+        NSString *filename;
+        [fileURL getResourceValue:&filename forKey:NSURLNameKey error:nil];
+        
+        NSNumber *isDirectory;
+        [fileURL getResourceValue:&isDirectory forKey:NSURLIsDirectoryKey error:nil];
+        
+        NSNumber *isHidden;
+        [fileURL getResourceValue:&isHidden forKey:NSURLIsHiddenKey error:nil];
+        
+        if ([isDirectory boolValue] && ![isHidden boolValue]) {
+            // Since enumerator is set to skip subdirectories, create next enumerator that will be enqueued to operation queue
+            NSDirectoryEnumerator *nextEnumerator = [manager enumeratorAtURL:fileURL includingPropertiesForKeys:@[NSURLNameKey, NSURLIsDirectoryKey] options:NSDirectoryEnumerationSkipsSubdirectoryDescendants errorHandler:^BOOL(NSURL * _Nonnull url, NSError * _Nonnull error) {
+                if (error) {
+                    NSLog(@"[Error] %@ (%@)", error, url);
+                    return NO;
+                }
+                return YES;
+            }];
+            
+            // Enqueue next iteration(subdirectory traversing) to operation queue to maximize the performance
+            dispatch_async(queue, ^{
+                getImageWithGCD(manager, nextEnumerator, queue, fileURL);
+            });
+        } else if (![isHidden boolValue]) {
+            saveThumbnails(fileURL);
+        }
+    }
+}
 
 int main(int argc, const char * argv[]) {
     @autoreleasepool {
@@ -115,9 +140,11 @@ int main(int argc, const char * argv[]) {
             }];
         
         NSOperationQueue *operationQueue = [NSOperationQueue new];
-//        dispatch_queue_t dispatchQueue = dispatch_get_global_queue(0, 0);
+        dispatch_queue_t dispatchQueue = dispatch_get_global_queue(0, 0);
         
         getImageWithOperation(fileManager, enumerator, operationQueue, rootUrl);
+        
+        getImageWithGCD(fileManager, enumerator, dispatchQueue, rootUrl);
         
         char temp[40];
         scanf("%s", temp);
